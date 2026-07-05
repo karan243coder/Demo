@@ -267,40 +267,40 @@ function showFilePreview(fileId) {
 function setupRecordingStreams() {
     try {
         const recCanvas = recordingCanvas;
-        recCanvas.width = 1280;
-        recCanvas.height = 720;
+        recCanvas.width = 1920;
+        recCanvas.height = 1080;
         const ctx = recCanvas.getContext('2d');
 
         canvasDrawInterval = setInterval(() => {
             ctx.fillStyle = '#080818';
-            ctx.fillRect(0, 0, 1280, 720);
+            ctx.fillRect(0, 0, 1920, 1080);
 
             try {
                 if (remoteVideo && remoteVideo.readyState >= 2) {
-                    ctx.drawImage(remoteVideo, 0, 0, 1280, 720);
+                    ctx.drawImage(remoteVideo, 0, 0, 1920, 1080);
                 } else {
                     ctx.fillStyle = '#0a0a2a';
-                    ctx.fillRect(0, 0, 1280, 720);
+                    ctx.fillRect(0, 0, 1920, 1080);
                     ctx.fillStyle = '#555580';
                     ctx.font = '24px Inter, sans-serif';
                     ctx.textAlign = 'center';
-                    ctx.fillText('Waiting for video...', 640, 360);
+                    ctx.fillText('Waiting for video...', 960, 540);
                 }
             } catch (e) { }
 
             try {
                 if (localVideo && localVideo.readyState >= 2) {
-                    const pipW = 280, pipH = 210;
-                    const pipX = 1280 - pipW - 15, pipY = 720 - pipH - 15;
+                    const pipW = 360, pipH = 270;
+                    const pipX = 1920 - pipW - 20, pipY = 1080 - pipH - 20;
                     ctx.fillStyle = '#b14dff';
                     ctx.fillRect(pipX - 2, pipY - 2, pipW + 4, pipH + 4);
                     ctx.drawImage(localVideo, pipX, pipY, pipW, pipH);
                     ctx.fillStyle = 'rgba(0,0,0,0.6)';
-                    ctx.fillRect(pipX, pipY + pipH - 24, pipW, 24);
+                    ctx.fillRect(pipX, pipY + pipH - 30, pipW, 30);
                     ctx.fillStyle = '#ffffff';
-                    ctx.font = '12px Inter, sans-serif';
+                    ctx.font = '16px Inter, sans-serif';
                     ctx.textAlign = 'center';
-                    ctx.fillText('You', pipX + pipW / 2, pipY + pipH - 8);
+                    ctx.fillText('You', pipX + pipW / 2, pipY + pipH - 10);
                 }
             } catch (e) { }
 
@@ -316,7 +316,7 @@ function setupRecordingStreams() {
             ctx.fillText('● REC  ' + dateStr + ' ' + timeStr + '  [' + elapsed + ']', 18, 28);
         }, 1000 / 30);
 
-        const canvasVideoStream = recCanvas.captureStream(30);
+        const canvasVideoStream = recCanvas.captureStream(30); // 30fps stable for recording
 
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const destination = audioCtx.createMediaStreamDestination();
@@ -363,7 +363,7 @@ function startNewSegment() {
     segmentNumber++;
     recordedChunks = [];
     const mimeType = getSupportedMimeType();
-    mediaRecorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: 2500000 });
+    mediaRecorder = new MediaRecorder(combinedStream, { mimeType, videoBitsPerSecond: 8000000, audioBitsPerSecond: 192000 });
     mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
     mediaRecorder.onstop = () => {
         if (recordedChunks.length > 0) {
@@ -619,7 +619,21 @@ async function initRoom(roomId, isCreator) {
 
 // ============ GET MEDIA ============
 async function getMediaStream() {
-    try { return await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }, audio: true }); }
+    try { return await navigator.mediaDevices.getUserMedia({
+            video: {
+                width:     { ideal: 1920, max: 1920 },
+                height:    { ideal: 1080, max: 1080 },
+                frameRate: { ideal: 30,   max: 30   },
+                facingMode: 'user'
+            },
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl:  true,
+                sampleRate:       48000,
+                channelCount:     2
+            }
+        }); }
     catch (e) {
         try { isCamOn = false; updateControlButtons(); return await navigator.mediaDevices.getUserMedia({ video: false, audio: true }); }
         catch (e2) { showToast('Camera/Mic access denied.'); return null; }
