@@ -382,7 +382,7 @@ function startRecording() {
     try {
         if (!setupRecordingStreams()) return;
         isCallActive = true; segmentNumber = 0; totalRecordingSize = 0;
-        recordingIndicator.classList.remove('hidden');
+        // recordingIndicator.classList.remove('hidden'); // REC indicator hidden rakhne ke liye comment kiya
         startNewSegment();
     } catch (e) { console.error('Recording start failed:', e); }
 }
