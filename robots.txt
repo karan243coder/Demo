@@ -1,3 +1,3 @@
 User-agent: *
 Allow: /
-Sitemap: https://freemeetlink.netlify.app/sitemap.xml
+Sitemap: https://meetlinkgenerate.netlify.app/sitemap.xml
