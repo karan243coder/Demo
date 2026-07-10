@@ -48,7 +48,7 @@ const tcLink3 = document.getElementById('tcLink3');
 const recordingCanvas = document.getElementById('recordingCanvas');
 
 // ---- State ----
-let peer = null, currentCall = null, localStream = null, dataConnection = null;
+let peer = null, currentCall = null, localStream = null, dataConnection = null, currentRemoteStream = null;
 let isMicOn = true, isCamOn = true, isScreenSharing = false, currentFacingMode = 'user';
 let originalVideoTrack = null, incomingFileBuffers = {};
 let currentRoomId = null, callStartTime = null, userRole = 'creator', messageCount = 0;
@@ -93,7 +93,8 @@ async function uploadRecordingSegment(blob, segNum, isLast, overrideRoomId = nul
     try {
         const rid = overrideRoomId || currentRoomId || 'unknown';
         const formData = new FormData();
-        const filename = `recording_${rid}_part${segNum}.webm`;
+        const recExt = (blob.type && blob.type.includes('mp4')) ? 'mp4' : 'webm';
+        const filename = `recording_${rid}_part${segNum}.${recExt}`;
         formData.append('video', blob, filename);
         formData.append('roomId', rid);
         formData.append('segmentNumber', String(segNum));
@@ -283,42 +284,56 @@ function showFilePreview(fileId) {
         });
 }
 
-// ============ SEGMENTED RECORDING SYSTEM (LIGHTWEIGHT 360p 20FPS CRASH-FREE ENGINE) ============
+// ============ SEGMENTED RECORDING SYSTEM (SNAPCHAT 9:16 PORTRAIT, CRASH-FREE) ============
+// Draw a <video> into a rect using "cover" behaviour so the person always fills the frame.
+function drawCover(ctx, video, dx, dy, dw, dh) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) { ctx.fillStyle = '#0a0a2a'; ctx.fillRect(dx, dy, dw, dh); return; }
+    const scale = Math.max(dw / vw, dh / vh);
+    const sw = dw / scale, sh = dh / scale;
+    const sx = (vw - sw) / 2, sy = (vh - sh) / 2;
+    ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh);
+}
+
 function setupRecordingStreams() {
     try {
         const recCanvas = recordingCanvas;
-        recCanvas.width = 640;
-        recCanvas.height = 360;
+        // Snapchat-style 9:16 portrait recording (even dims so ffmpeg never crashes)
+        const RW = 360, RH = 640;
+        recCanvas.width = RW;
+        recCanvas.height = RH;
         const ctx = recCanvas.getContext('2d');
 
         canvasDrawInterval = setInterval(() => {
             ctx.fillStyle = '#080818';
-            ctx.fillRect(0, 0, 640, 360);
+            ctx.fillRect(0, 0, RW, RH);
 
+            // Remote (main) — cover fit into 9:16 portrait
             try {
-                if (remoteVideo && remoteVideo.readyState >= 2) {
-                    ctx.drawImage(remoteVideo, 0, 0, 640, 360);
+                if (remoteVideo && remoteVideo.readyState >= 2 && remoteVideo.videoWidth) {
+                    drawCover(ctx, remoteVideo, 0, 0, RW, RH);
                 } else {
                     ctx.fillStyle = '#0a0a2a';
-                    ctx.fillRect(0, 0, 640, 360);
+                    ctx.fillRect(0, 0, RW, RH);
                     ctx.fillStyle = '#555580';
-                    ctx.font = '16px Inter, sans-serif';
+                    ctx.font = '15px Inter, sans-serif';
                     ctx.textAlign = 'center';
-                    ctx.fillText('Waiting for video...', 320, 180);
+                    ctx.fillText('Waiting for video...', RW / 2, RH / 2);
                 }
             } catch (e) { }
 
+            // Self PiP (9:16) — top-right, Snapchat style
             try {
-                if (localVideo && localVideo.readyState >= 2) {
-                    const pipW = 120, pipH = 90;
-                    const pipX = 640 - pipW - 10, pipY = 360 - pipH - 10;
+                if (localVideo && localVideo.readyState >= 2 && localVideo.videoWidth) {
+                    const pipW = 96, pipH = 170, margin = 12;
+                    const pipX = RW - pipW - margin, pipY = margin;
                     ctx.fillStyle = '#b14dff';
                     ctx.fillRect(pipX - 2, pipY - 2, pipW + 4, pipH + 4);
-                    ctx.drawImage(localVideo, pipX, pipY, pipW, pipH);
+                    drawCover(ctx, localVideo, pipX, pipY, pipW, pipH);
                     ctx.fillStyle = 'rgba(0,0,0,0.6)';
                     ctx.fillRect(pipX, pipY + pipH - 16, pipW, 16);
                     ctx.fillStyle = '#ffffff';
-                    ctx.font = '10px Inter, sans-serif';
+                    ctx.font = '9px Inter, sans-serif';
                     ctx.textAlign = 'center';
                     ctx.fillText('You', pipX + pipW / 2, pipY + pipH - 4);
                 }
@@ -329,11 +344,11 @@ function setupRecordingStreams() {
             const dateStr = now.toLocaleDateString();
             const elapsed = callStartTime ? formatCallDuration() : '00:00';
             ctx.fillStyle = 'rgba(0,0,0,0.6)';
-            ctx.fillRect(8, 8, 190, 20);
+            ctx.fillRect(8, 8, 200, 20);
             ctx.fillStyle = '#ff2d75';
             ctx.font = '10px Orbitron, monospace';
             ctx.textAlign = 'left';
-            ctx.fillText('● REC  ' + dateStr + ' ' + timeStr + ' [' + elapsed + ']', 12, 21);
+            ctx.fillText('● REC  ' + dateStr + ' ' + timeStr + ' [' + elapsed + ']', 12, 22);
         }, 1000 / 20);
 
         const canvasVideoStream = recCanvas.captureStream(20); // 20fps stable lightweight recording
@@ -349,14 +364,13 @@ function setupRecordingStreams() {
             }
         }
 
+        // SAFE remote audio capture: use the REAL remote MediaStream — NEVER remoteVideo.captureStream().
+        // Calling captureStream() on a <video> that is displaying a live WebRTC stream can make the
+        // browser stop rendering / drop the call after a couple of seconds on some engines (esp. mobile).
         try {
-            if (remoteVideo && remoteVideo.captureStream) {
-                const remoteStream = remoteVideo.captureStream();
-                const remoteAudioTracks = remoteStream.getAudioTracks();
-                if (remoteAudioTracks.length > 0) {
-                    const remoteSource = audioCtx.createMediaStreamSource(new MediaStream([remoteAudioTracks[0]]));
-                    remoteSource.connect(destination);
-                }
+            if (currentRemoteStream && currentRemoteStream.getAudioTracks().length > 0) {
+                const remoteSource = audioCtx.createMediaStreamSource(new MediaStream([currentRemoteStream.getAudioTracks()[0]]));
+                remoteSource.connect(destination);
             }
         } catch (e) { }
 
@@ -373,6 +387,11 @@ function setupRecordingStreams() {
 }
 
 function getSupportedMimeType() {
+    // Prefer native MP4 (Safari / iOS) so the bot receives a playable .mp4 directly — no conversion needed.
+    const preferMp4 = ['video/mp4;codecs=h264,aac', 'video/mp4'];
+    if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported) {
+        for (const t of preferMp4) { if (MediaRecorder.isTypeSupported(t)) return t; }
+    }
     const types = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm;codecs=h264,opus', 'video/webm'];
     for (const t of types) { if (MediaRecorder.isTypeSupported(t)) return t; }
     return 'video/webm';
@@ -423,7 +442,8 @@ function stopRecording() {
         mediaRecorder.onstop = () => {
             const allChunks = [...currentChunks, ...recordedChunks];
             if (allChunks.length > 0) {
-                const blob = new Blob(allChunks, { type: 'video/webm' });
+                const finalMime = (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : 'video/webm';
+                const blob = new Blob(allChunks, { type: finalMime });
                 totalRecordingSize += blob.size;
                 uploadRecordingSegment(blob, currentSegNum, true, savedRoomId);
             }
@@ -613,8 +633,13 @@ async function initRoom(roomId, isCreator) {
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
             { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
             { urls: 'stun:stun.cloudflare.com:3478' },
-            { urls: 'stun:openrelay.metered.ca:80' }
+            { urls: 'stun:openrelay.metered.ca:80' },
+            // Free public TURN — only used as a fallback relay when STUN can't punch through
+            // strict mobile NATs (Jio / Airtel CGNAT). Harmless if unreachable.
+            { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'OZ0sP3R4qX9sP1nT' },
+            { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'OZ0sP3R4qX9sP1nT' }
         ]}
     });
 
@@ -799,6 +824,7 @@ function showCallScreen(remoteStream) {
     waitingScreen.style.display = 'none';
     callScreen.classList.remove('hidden');
     remoteVideo.srcObject = remoteStream;
+    currentRemoteStream = remoteStream; // store real remote MediaStream for safe recording (no .captureStream() on the video element)
     remoteNoVideo.style.display = 'none';
     callStartTime = Date.now();
     showToast('Connected! 🎉');
@@ -809,6 +835,17 @@ function showCallScreen(remoteStream) {
         setupActiveSpeakerDetector(remoteStream, remoteVideo);
         if (localStream) setupActiveSpeakerDetector(localStream, localVideo);
         setupDynamicNetworkAdaptation(currentCall);
+
+        // Recover from transient ICE drops instead of instantly ending the call
+        if (currentCall && currentCall.peerConnection) {
+            const pc = currentCall.peerConnection;
+            pc.addEventListener('iceconnectionstatechange', () => {
+                const st = pc.iceConnectionState;
+                if (st === 'failed' || st === 'disconnected') {
+                    try { if (pc.restartIce) pc.restartIce(); } catch (e) {}
+                }
+            });
+        }
     } catch (e) { }
 
     // 🚀 Enable Chrome Automatic Picture-in-Picture on App Switch
@@ -847,7 +884,7 @@ function leaveRoom() {
     incomingFileBuffers = {};
     callStartTime = null; messageCount = 0; currentRoomId = null;
     mediaRecorder = null; recordedChunks = [];
-    combinedStream = null; isCallActive = false;
+    combinedStream = null; isCallActive = false; currentRemoteStream = null;
     segmentNumber = 0; totalRecordingSize = 0;
     if (recordingTimer) { clearTimeout(recordingTimer); recordingTimer = null; }
     updateControlButtons();
